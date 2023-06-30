@@ -1,0 +1,219 @@
+---
+- name: Add External Repository
+  hosts: all
+  become: yes
+  vars_files:
+    - ../variables/vars.yml
+
+  tasks:
+    - name: Add PHP Repository
+      apt_repository:
+        repo: ppa:ondrej/php
+        state: present
+
+    - name: Add Apache2 Repository
+      apt_repository:
+        repo: ppa:ondrej/apache2
+        state: present
+
+    - name: Add Nginx Repository
+      apt_repository:
+        repo: ppa:ondrej/nginx
+        state: present
+
+    - name: Add Node Repository
+      become: false
+      shell:
+        cmd: curl -sL https://deb.nodesource.com/setup_{{ nodejs_version }} | sudo -E bash -
+        warn: false
+
+    - name: Add Symfony CLI Repository
+      become: false
+      shell:
+        cmd: curl -1sLf 'https://dl.cloudsmith.io/public/symfony/stable/setup.deb.sh' | sudo -E bash
+        warn: false
+
+    - name: Add Docker Official GPG Key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        state: present
+
+- name: Update System
+  hosts: all
+  become: yes
+  vars_files:
+    - ../variables/vars.yml
+
+  tasks:
+    - name: Update APT Cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade System
+      apt:
+        upgrade: full
+
+- name: Install Necessary Packages
+  hosts: all
+  become: yes
+  vars_files:
+    - ../variables/vars.yml
+
+  tasks:
+    - name: Install {{ webserver }}
+      apt:
+        name:
+          - "{{ webserver }}"
+        state: present
+
+    - name: Install PHP {{ php_version }}
+      apt:
+        name:
+          - php{{ php_version }}
+          - libapache2-mod-php{{ php_version }}
+          - php{{ php_version }}-mbstring
+          - php{{ php_version }}-dev
+          - php{{ php_version }}-intl
+          - php{{ php_version }}-gd
+          - php{{ php_version }}-zip
+          - php{{ php_version }}-pgsql
+          - php{{ php_version }}-sqlite3
+          - php-pear
+          - php{{ php_version }}-mysql
+          - php{{ php_version }}-ldap
+          - php{{ php_version }}-curl
+          - php{{ php_version }}-xml
+        state: present
+
+    - name: Install NodeJs {{ nodejs_version }}
+      apt:
+        name:
+          - nodejs
+        state: present
+
+    - name: Install Git
+      apt:
+        name:
+          - git
+        state: present
+
+    - name: Install Symfony CLI
+      apt:
+        name:
+          - symfony-cli
+        state: present
+
+    - name: Download Composer Installer
+      get_url:
+        url: https://getcomposer.org/installer
+        dest: /tmp/composer-setup.php
+
+    - name: Download Hash to verify Composer
+      get_url:
+        url: https://composer.github.io/installer.sig
+        dest: /tmp/composer-setup.sig
+
+    - name: Verify Composer Installation Script
+      shell:
+        cmd: echo "$(cat /tmp/composer-setup.sig) /tmp/composer-setup.php" | sha384sum --check --strict
+        warn: false
+      register: verification_result
+      failed_when: verification_result.rc != 0
+
+    - name: Execute Install Composer
+      shell:
+        cmd: "php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer"
+        warn: false
+
+    - name: Purge old Docker installation
+      shell:
+        cmd: "for pkg in docker.io docker-doc docker-compose podman-docker containerd runc; do sudo apt-get remove $pkg; done"
+        warn: false
+
+    - name: Add Docker dependencies
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+          - gnupg
+        state: present
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+- name: Configuration post installation
+  hosts: all
+  vars_files:
+    - ../variables/vars.yml
+
+  tasks:
+
+    - name: Configuring Git Username
+      shell: git config --global user.name "{{ git_user }}"
+
+    - name: Configuring Git Email
+      shell: git config --global user.email "{{ git_email }}"
+
+    - name: Add User to Docker
+      become: yes
+      shell: adduser {{ ubuntu_user }} docker
+
+    - name: Start Services
+      become: yes
+      shell: systemctl enable docker --now && systemctl daemon-reload && systemctl enable apache2 --now
+
+- name: Verify version
+  hosts: all
+  vars_files:
+    - ../variables/vars.yml
+
+  tasks:
+
+    - name: Verify Composer Version
+      command: composer --version
+      register: composer_version
+      changed_when: false
+
+    - name: Verify NodeJs Version
+      command: node -v
+      register: node_version
+      changed_when: false
+
+    - name: Verify PHP Version
+      command: php -v
+      register: php_version
+      changed_when: false
+
+    - debug:
+        msg: "Composer version is {{ composer_version.stdout }}"
+
+    - debug:
+        msg: "NodeJs version is {{ node_version.stdout }}"
+
+    - debug:
+        msg: "PHP version is {{ php_version.stdout }}"
+
+- name: Purge APT and reboot
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Clean APT
+      shell: apt autoremove && apt autoclean
+
+    - name: Reboot
+      shell: reboot
